@@ -9,6 +9,8 @@ The CRM backend sends queued campaign messages to this service. The channel serv
 Install dependencies:
 
 ```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
