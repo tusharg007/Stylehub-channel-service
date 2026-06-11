@@ -1,3 +1,18 @@
+"""
+Xeno channel service — stubbed message delivery simulation.
+
+Exposes two send endpoints:
+  POST /send       — single message (fire and forget)
+  POST /send-batch — up to 1000 messages (chunks, parallel)
+
+Each received message is simulated asynchronously via asyncio.create_task.
+The simulation fires callbacks to CRM_RECEIPT_URL as the message progresses
+through its delivery lifecycle: sent → delivered → opened → clicked (or failed).
+
+This service is intentionally stateless — no database, no persistence.
+All simulation state lives in the asyncio event loop.
+"""
+
 import asyncio
 import logging
 from collections import Counter
@@ -42,6 +57,36 @@ app = FastAPI(title="Xeno Channel Service")
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "xeno-channel-service"}
+
+
+@app.get("/status")
+async def status() -> dict[str, object]:
+    """Observability endpoint — shows simulation statistics.
+
+    Useful for verifying the channel service is processing messages
+    and callbacks are reaching the CRM during demos and debugging.
+    """
+    return {
+        "status": "ok",
+        "service": "xeno-channel-service",
+        "stats": {
+            "total_simulated": simulator.total_simulated,
+            "callbacks_sent": simulator.total_callbacks_sent,
+            "callbacks_failed": simulator.total_callbacks_failed,
+            "success_rate": (
+                round(
+                    simulator.total_callbacks_sent
+                    / max(
+                        simulator.total_callbacks_sent
+                        + simulator.total_callbacks_failed,
+                        1,
+                    )
+                    * 100,
+                    1,
+                )
+            ),
+        },
+    }
 
 
 @app.post("/send")

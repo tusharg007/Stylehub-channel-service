@@ -1,3 +1,17 @@
+"""
+Delivery simulator for Xeno channel service.
+
+Simulates the real-world lifecycle of a branded message:
+  sent → delivered (or failed) → opened → clicked
+
+Each stage has channel-specific probability profiles based on
+industry benchmarks for WhatsApp, SMS, and Email.
+
+The _post_event method uses a retry loop (3 attempts, exponential backoff)
+to handle transient failures reaching the CRM receipt endpoint.
+In production this would be a message queue with dead-letter handling.
+"""
+
 import asyncio
 import logging
 import random
@@ -39,20 +53,50 @@ CHANNEL_CONFIG = {
 class DeliverySimulator:
     def __init__(self, crm_receipt_url: str):
         self.crm_url = crm_receipt_url
+        self.total_simulated = 0
+        self.total_callbacks_sent = 0
+        self.total_callbacks_failed = 0
 
     async def _post_event(self, message_id: str, event: str) -> None:
+        """POST a delivery event to the CRM receipt endpoint.
+
+        Retries up to 3 times with exponential backoff on connection errors.
+        After 3 failures, logs and continues — the simulation does not stop.
+        """
         payload = {
             "message_id": message_id,
             "event": event,
             "timestamp": datetime.utcnow().isoformat(),
         }
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.post(self.crm_url, json=payload)
-        except Exception as exc:
-            logger.warning("Callback failed for %s event=%s: %s", message_id, event, exc)
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    response = await client.post(self.crm_url, json=payload)
+                    if response.status_code < 500:
+                        self.total_callbacks_sent += 1
+                        return
+                    logger.warning(
+                        "Receipt endpoint returned %s for %s/%s, attempt %s/3",
+                        response.status_code,
+                        message_id,
+                        event,
+                        attempt + 1,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Callback failed for %s/%s attempt %s/3: %s",
+                    message_id,
+                    event,
+                    attempt + 1,
+                    exc,
+                )
+            if attempt < 2:
+                await asyncio.sleep(0.5 * (2**attempt))
+        self.total_callbacks_failed += 1
+        logger.error("All retry attempts failed for %s/%s", message_id, event)
 
     async def simulate(self, message_id: str, channel: str) -> None:
+        self.total_simulated += 1
         cfg = CHANNEL_CONFIG.get(channel, CHANNEL_CONFIG["whatsapp"])
         jitter = lambda: random.uniform(0.8, 1.2)
 
