@@ -29,6 +29,7 @@ logging.basicConfig(level=logging.INFO)
 
 class Settings(BaseSettings):
     crm_receipt_url: str = "http://localhost:8000/receipt"
+    crm_base_url: str = "http://localhost:8000"
     port: int = 8001
 
     model_config = SettingsConfigDict(
@@ -50,7 +51,10 @@ class SendRequest(BaseModel):
     channel: str
 
 
-simulator = DeliverySimulator(crm_receipt_url=settings.crm_receipt_url)
+simulator = DeliverySimulator(
+    crm_receipt_url=settings.crm_receipt_url,
+    crm_base_url=settings.crm_base_url,
+)
 app = FastAPI(title="Xeno Channel Service")
 
 
@@ -91,7 +95,9 @@ async def status() -> dict[str, object]:
 
 @app.post("/send")
 async def send(req: SendRequest) -> dict[str, str]:
-    asyncio.create_task(simulator.simulate(req.message_id, req.channel))
+    asyncio.create_task(
+        simulator.simulate(req.message_id, req.channel, req.customer_id, req.campaign_id)
+    )
     return {"status": "queued", "message_id": req.message_id}
 
 
@@ -100,7 +106,9 @@ async def send_batch(requests: list[SendRequest]) -> dict[str, object]:
     truncated_requests = requests[:1000]
     channel_counts = Counter(req.channel for req in truncated_requests)
     for req in truncated_requests:
-        asyncio.create_task(simulator.simulate(req.message_id, req.channel))
+        asyncio.create_task(
+            simulator.simulate(req.message_id, req.channel, req.customer_id, req.campaign_id)
+        )
     return {
         "queued": len(truncated_requests),
         "channel_breakdown": dict(channel_counts),

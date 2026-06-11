@@ -27,6 +27,7 @@ CHANNEL_CONFIG = {
         "failure": 0.03,
         "open": 0.55,
         "click": 0.32,
+        "read_rate": 0.70,
         "delivery_delay": (0.5, 2.0),
         "open_delay": (2.0, 6.0),
         "click_delay": (1.0, 3.0),
@@ -35,6 +36,7 @@ CHANNEL_CONFIG = {
         "failure": 0.08,
         "open": 0.35,
         "click": 0.18,
+        "read_rate": 0.0,
         "delivery_delay": (1.0, 4.0),
         "open_delay": (5.0, 12.0),
         "click_delay": (2.0, 5.0),
@@ -43,6 +45,7 @@ CHANNEL_CONFIG = {
         "failure": 0.05,
         "open": 0.25,
         "click": 0.22,
+        "read_rate": 0.0,
         "delivery_delay": (0.3, 1.0),
         "open_delay": (10.0, 30.0),
         "click_delay": (3.0, 8.0),
@@ -51,8 +54,9 @@ CHANNEL_CONFIG = {
 
 
 class DeliverySimulator:
-    def __init__(self, crm_receipt_url: str):
+    def __init__(self, crm_receipt_url: str, crm_base_url: str):
         self.crm_url = crm_receipt_url
+        self.crm_base_url = crm_base_url.rstrip("/")
         self.total_simulated = 0
         self.total_callbacks_sent = 0
         self.total_callbacks_failed = 0
@@ -95,7 +99,24 @@ class DeliverySimulator:
         self.total_callbacks_failed += 1
         logger.error("All retry attempts failed for %s/%s", message_id, event)
 
-    async def simulate(self, message_id: str, channel: str) -> None:
+    async def _post_attribution(self, customer_id: str, campaign_id: str) -> None:
+        order_amount = round(random.uniform(500, 4000), 2)
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(
+                    f"{self.crm_base_url}/customers/{customer_id}/order-attributed",
+                    json={"campaign_id": campaign_id, "order_amount": order_amount},
+                )
+        except Exception as exc:
+            logger.warning("Attribution call failed: %s", exc)
+
+    async def simulate(
+        self,
+        message_id: str,
+        channel: str,
+        customer_id: str,
+        campaign_id: str,
+    ) -> None:
         self.total_simulated += 1
         cfg = CHANNEL_CONFIG.get(channel, CHANNEL_CONFIG["whatsapp"])
         jitter = lambda: random.uniform(0.8, 1.2)
@@ -108,9 +129,16 @@ class DeliverySimulator:
             return
         await self._post_event(message_id, "delivered")
 
+        await asyncio.sleep(random.uniform(1.0, 3.0) * jitter())
+        if cfg.get("read_rate", 0) > 0 and random.random() < cfg["read_rate"]:
+            await self._post_event(message_id, "read")
+
         await asyncio.sleep(random.uniform(*cfg["open_delay"]) * jitter())
         if random.random() < cfg["open"]:
             await self._post_event(message_id, "opened")
             await asyncio.sleep(random.uniform(*cfg["click_delay"]) * jitter())
             if random.random() < cfg["click"]:
                 await self._post_event(message_id, "clicked")
+                await asyncio.sleep(random.uniform(30.0, 120.0))
+                if random.random() < 0.25:
+                    await self._post_attribution(customer_id, campaign_id)
