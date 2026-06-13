@@ -21,6 +21,9 @@ import httpx
 
 
 logger = logging.getLogger(__name__)
+CALLBACK_ATTEMPTS = 8
+CALLBACK_TIMEOUT_SECONDS = 15.0
+CALLBACK_CONCURRENCY = 8
 
 CHANNEL_CONFIG = {
     "whatsapp": {
@@ -60,11 +63,12 @@ class DeliverySimulator:
         self.total_simulated = 0
         self.total_callbacks_sent = 0
         self.total_callbacks_failed = 0
+        self._callback_semaphore = asyncio.Semaphore(CALLBACK_CONCURRENCY)
 
     async def _post_event(self, message_id: str, event: str) -> None:
         """POST a delivery event to the CRM receipt endpoint.
 
-        Retries up to 3 times with exponential backoff on connection errors.
+        Retries with exponential backoff on connection errors and server errors.
         After 3 failures, logs and continues — the simulation does not stop.
         """
         payload = {
@@ -72,30 +76,35 @@ class DeliverySimulator:
             "event": event,
             "timestamp": datetime.utcnow().isoformat(),
         }
-        for attempt in range(3):
+        for attempt in range(CALLBACK_ATTEMPTS):
             try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    response = await client.post(self.crm_url, json=payload)
-                    if response.status_code < 500:
-                        self.total_callbacks_sent += 1
-                        return
-                    logger.warning(
-                        "Receipt endpoint returned %s for %s/%s, attempt %s/3",
-                        response.status_code,
-                        message_id,
-                        event,
-                        attempt + 1,
-                    )
-            except Exception as exc:
+                async with self._callback_semaphore:
+                    async with httpx.AsyncClient(timeout=CALLBACK_TIMEOUT_SECONDS) as client:
+                        response = await client.post(self.crm_url, json=payload)
+                if 200 <= response.status_code < 300:
+                    self.total_callbacks_sent += 1
+                    return
                 logger.warning(
-                    "Callback failed for %s/%s attempt %s/3: %s",
+                    "Receipt endpoint returned %s for %s/%s, attempt %s/%s",
+                    response.status_code,
                     message_id,
                     event,
                     attempt + 1,
+                    CALLBACK_ATTEMPTS,
+                )
+                if response.status_code in {400, 404, 422}:
+                    break
+            except Exception as exc:
+                logger.warning(
+                    "Callback failed for %s/%s attempt %s/%s: %s",
+                    message_id,
+                    event,
+                    attempt + 1,
+                    CALLBACK_ATTEMPTS,
                     exc,
                 )
-            if attempt < 2:
-                await asyncio.sleep(0.5 * (2**attempt))
+            if attempt < CALLBACK_ATTEMPTS - 1:
+                await asyncio.sleep(min(20.0, 1.0 * (2**attempt)) + random.uniform(0, 0.5))
         self.total_callbacks_failed += 1
         logger.error("All retry attempts failed for %s/%s", message_id, event)
 
