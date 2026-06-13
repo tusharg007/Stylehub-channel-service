@@ -11,3 +11,5 @@ services:
         value: 3.11.9
       - key: CRM_RECEIPT_URL
         sync: false
+      - key: CRM_BASE_URL
+        sync: false
