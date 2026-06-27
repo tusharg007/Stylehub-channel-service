@@ -1,4 +1,4 @@
-# Xeno Channel Service
+# Channel Service
 
 Stateless FastAPI microservice that simulates WhatsApp, SMS, and email delivery for the Xeno Mini CRM backend.
 
