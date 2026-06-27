@@ -1,6 +1,6 @@
 # Channel Service
 
-Stateless FastAPI microservice that simulates WhatsApp, SMS, and email delivery for the Xeno Mini CRM backend.
+Stateless FastAPI microservice that simulates WhatsApp, SMS, and email delivery for the Mini CRM backend.
 
 The CRM backend sends queued campaign messages to this service. The channel service immediately starts async delivery simulations and posts receipt callbacks back to the CRM `/receipt` endpoint.
 
